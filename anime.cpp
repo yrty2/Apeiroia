@@ -11,9 +11,12 @@ using namespace std;
 constexpr int width=78;//should be %2==0
 constexpr int height=50;
 constexpr int sight=4;
+constexpr double rayeps=8;
+constexpr int rayiteration=100;
+constexpr int minimapRadius=5;
 constexpr int wallheight=50;
 constexpr double pi=3.14159265358979323846;
-constexpr double fp=0.6;//視力が悪いとこの値が大きい？
+constexpr double fp=0.7;//視力が悪いとこの値が大きい？
 constexpr double viewwidth=0.5;
 const string wall="#";
 const string unpathable="W";
@@ -25,13 +28,6 @@ using vec2=array<int,2>;
 using complex=array<double,2>;
 
 int mod(int a,int b){
-	/*if(a>0){
-		return a%b;
-	}
-	if(a%b==0){
-		return 0;
-	}
-	return a%b+b;*/
 	return (a%b+b)%b;
 }
 double mod(double a,double b){
@@ -319,19 +315,27 @@ void draw(int i,int j,string str,int u[2],int color){
 			attroff(COLOR_PAIR(color));
 		}
 }
+void printc(int i,int j,string str,int color){
+		if(color!=-1){
+			attron(COLOR_PAIR(color));
+		}
+		mvprintw(j,2*i,"%s ",str.c_str());
+		if(color!=-1){
+			attroff(COLOR_PAIR(color));
+		}
+}
 void drawWithDepth(Space<Tile>& map,array<vec2,width> room,array<double,width> depth,array<int,width> wd){
 	for(int k=0; k<width; ++k){
 		if(depth[k]!=-1){
 			int roomid[2]={room[k][0],room[k][1]};
 			//見ているものは正しいようだ。
 			Tile t=touch(map,roomid,0,0);
-			
 				double yh=wallheight/(1+depth[k]);
 				//yhがheightより小さいなら、centerからyh/2だけ上下に伸ばす
 				int center=height/2;
 				for(int h=0; h<height; ++h){
 					if(h<=center-yh/2){
-						//mvprintw(,2*k,"%s ",wall.c_str());
+						mvprintw(h,2*k,"_ ");
 					}else if(h<center+yh/2){
 						int color=0;
 						switch (wd[k]){
@@ -365,9 +369,12 @@ void drawWithDepth(Space<Tile>& map,array<vec2,width> room,array<double,width> d
 				}
 			
 		}else{
+			for(int h=0; h<height/2; ++h){
+				mvprintw(h,2*k,"_");
+			}
 			for(int h=height/2; h<height; ++h){
-					mvprintw(h,2*k,". ");
-				}
+				mvprintw(h,2*k,". ");
+			}
 		}
 	}
 }
@@ -398,27 +405,40 @@ while(true){
 		array<vec2,width> viewi={};
 		array<double,width> depth={};
 		array<int,width> walldirection={};
+		double a=width;
+		double dheight=height;
+		complex imag={0,1};
+		complex up={u[0]+0.5,u[1]+0.5};
+		complex dir=sightdir;
+		complex q=sum(smul(dir,-fp),up);
 		//レイマーチ
 		for(int k=0; k<width; ++k){
-			complex imag={0,1};
-			complex up={u[0]+0.5,u[1]+0.5};
-			complex dir=sightdir;
-			//-1~1
-			double a=width;
-			double dheight=height;
+			int multiply=1;
+			bool ambiguity=false;
+			double store=0;
+			int at=0;
+			int additional=0;
 			complex pos=sum(mul(smul(dir,(2*k/a-1)*viewwidth),imag),up);
-			complex q=sum(smul(dir,-fp),up);
-			complex eps=sdiv(normalize(sub(q,pos)),-50);//sdiv(neg(mp),25*sqrt(norm(mp)));
-			int iteration=1000;
-			for(int i=0; i<iteration; ++i){
-				pos=sum(pos,eps);
+			complex eps=sdiv(normalize(sub(q,pos)),-rayeps);//sdiv(neg(mp),25*sqrt(norm(mp)));
+			for(int i=0; i<rayiteration+additional; ++i){
+				pos=sum(pos,sdiv(eps,multiply));
+				complex p=pos;
 				//衝突
-				int roompos[2]={static_cast<int>(floor(pos[0])),static_cast<int>(floor(pos[1]))};
+				int roompos[2]={static_cast<int>(floor(p[0])),static_cast<int>(floor(p[1]))};
 				//衝突判定が怪しい
+				vec2 romp={mod(roompos[0],width),mod(roompos[1],height)};
+				map[romp[0]][romp[1]].revealed=true;
 				if(touch(map,roompos,0,0).wall){
-					vec2 romp={mod(roompos[0],width),mod(roompos[1],height)};
 					viewi[k]=romp;
-					complex post={mod(pos[0],a),mod(pos[1],dheight)};
+					complex post={mod(p[0],a),mod(p[1],dheight)};
+					if(!ambiguity && (pow(post[0]-romp[0],2)+pow(post[1]-romp[1],2)<1.2/(rayeps*rayeps) || pow(post[0]-romp[0]-1,2)+pow(post[1]-romp[1],2)<1.2/(rayeps*rayeps) || pow(post[0]-romp[0]-1,2)+pow(post[1]-romp[1]-1,2)<1.2/(rayeps*rayeps) || pow(post[0]-romp[0],2)+pow(post[1]-romp[1]-1,2)<1.2/(rayeps*rayeps))){
+						ambiguity=true;
+						multiply=20;
+						at=i;
+						store=i/rayeps;
+						additional=(rayiteration-i)*multiply;
+						pos=sub(pos,eps);
+					}else{
 					double d=pow(post[0]-romp[0]-0.5,2)-pow(post[1]-romp[1]-0.5,2);
 					if(d>0){
 						//x軸
@@ -438,11 +458,17 @@ while(true){
 							walldirection[k]=0;
 						}
 					}
-					depth[k]=i/50.;
+					if(ambiguity){
+						store+=(i-at)/(rayeps*multiply);
+					}else{
+						store=i/rayeps;
+					}
+					depth[k]=store;
 					//log+="("+to_string(depth[k])+")";
 					break;
+					}
 				}
-				if(i==iteration-1){
+				if(i==rayiteration+additional-1){
 					vec2 rm={-1,-1};
 					viewi[k]=rm;
 					depth[k]=-1;
@@ -480,7 +506,41 @@ while(true){
 		}
 	}
 	}
-	if(!raymarching){
+	if(raymarching){
+		//minimap
+		int scalem=1+2*minimapRadius;
+		for(int i=0; i<scalem; ++i){
+			for(int j=0; j<scalem; ++j){
+				Tile t=touch(map,u,i-minimapRadius,j-minimapRadius);
+				if(t.revealed){
+					if(t.wall){
+						if(t.view){
+							if(t.weight==sight){
+							printc(width-scalem+i,j,wall,2);
+							}else{
+								printc(width-scalem+i,j,wall,-1);
+							}
+						}else{
+							printc(width-scalem+i,j,wall,1);
+						}
+					}else{
+						if(t.view){
+							if(t.weight==sight){
+								printc(width-scalem+i,j,".",2);
+							}else{
+								printc(width-scalem+i,j,".",-1);
+							}
+						}else{
+							printc(width-scalem+i,j,".",1);
+						}
+					}
+				}else{
+					printc(width-scalem+i,j," ",2);
+				}
+			}
+		}
+		printc(width-scalem+minimapRadius,minimapRadius,"@",-1);
+	}else{
 		mvprintw(height/2,width,"%s ",playerch.c_str());
 		if(!touch(map,u,round(sightdir[0]),round(sightdir[1])).wall){
 			mvprintw(round(height/2+sightdir[1]),round(width+2*sightdir[0]),", ");
